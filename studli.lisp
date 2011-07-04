@@ -11,7 +11,9 @@
 
 (defparameter *url* "https://studip.uni-passau.de/studip/")
 
-(load "~/.studlirc")
+(defparameter *rc-file* "~/.studlirc")
+
+(load *rc-file*)
 
 (defparameter *cookie* (make-instance 'cookie-jar))
 
@@ -159,6 +161,39 @@
   (loop for name in selection
      and j = 1 then (1+ j)
      do (format t "~a: ~a~%" (funcall str-pos name) j)))
+
+;; do-change-password: String String -> void
+;; EFFECT: change old-password for username to new-password, also
+;; change the corresponding studlirc file, read old-password
+(defun do-change-password (new-password)
+  (progn
+    (change-rc-parameter "*password*" new-password)
+    (change-password-request *username* new-password *password*)
+    (defparameter *password* new-password)))
+
+;; change-rc-parameter: String String -> void
+;; EFFECT: change studlirc to have the new or replaced value in
+;; parameter
+(defun change-rc-parameter (parameter value)
+  (labels ((escape-earmuffs (str)
+             (regex-replace-all "\\*" str "\\\\*")))
+    (alexandria:write-string-into-file
+     (regex-replace (format nil "(~A)\\s+.*?\\)" (escape-earmuffs parameter)) (alexandria:read-file-into-string *rc-file*) (format nil "\\1 ~w)" value))
+     *rc-file*
+     :if-exists :supersede)))
+
+;; change-password-request: String String String -> void
+;; make a request to change your password on studip for the username
+;; from old to new
+(defun change-password-request (username new old)
+  (http-request "https://www.rz.uni-passau.de/cgi-bin/setpass"
+                :parameters `(("user" . ,username)
+                              ("opass" . ,old)
+                              ("npass" . ,new)
+                              ("npass2" . ,new)
+                              ("change" . "true"))
+                :method :post
+                :cookie-jar *cookie*))
 
 (when *testing*
   (run-tests))
