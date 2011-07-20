@@ -1,3 +1,8 @@
+;; (ql:quickload 'drakma)
+;; (ql:quickload 'cl-ppcre)
+;; (ql:quickload 'lisp-unit)
+;; (ql:quickload 'alexandria)
+
 (defpackage :studli
   (:use :cl :drakma :cl-ppcre :lisp-unit))
 
