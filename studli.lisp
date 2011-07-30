@@ -2,6 +2,7 @@
 ;; (ql:quickload 'cl-ppcre)
 ;; (ql:quickload 'lisp-unit)
 ;; (ql:quickload 'alexandria)
+;; (ql:quickload 'html-entities)
 
 (defpackage :studli
   (:use :cl :drakma :cl-ppcre :lisp-unit))
@@ -14,13 +15,28 @@
 
 (defparameter *password* "")
 
+(defparameter *list-num-first-seminars* 5)
+
 (defparameter *url* "https://studip.uni-passau.de/studip/")
 
 (defparameter *rc-file* "~/.studlirc")
 
+(defparameter *seminars* (list-all-seminars))
+
 (load *rc-file*)
 
 (defparameter *cookie* (make-instance 'cookie-jar))
+
+;;; studip-http-request: String -> String
+;;; make an http-request to the studip-website concatenated with the suffix
+(defun studip-http-request (suffix)
+  (http-request (concatenate 'string *url* suffix)
+                :cookie-jar *cookie*))
+
+;;; index-request: -> String
+;;; return the html of the index-page of studip
+(defun index-request ()
+  (studip-http-request "index.php"))
 
 ;; init-session: string string -> boolean
 ;; initiate login to studip with username :username, password
@@ -28,39 +44,62 @@
 (defun init-session (&key username password)
   (let ((response (do-init-request)))
     (cond
-      ((scan "eingeloggt" response) (http-request (concatenate 'string *url* "index.php")
-                                                  :cookie-jar *cookie*))
-      (t
-       (multiple-value-bind (regex matches)
-           (scan-to-strings "id=\"login_ticket\" value=\"(\\S+)?\"" response)
-         (declare (ignore regex))
-         (let ((login-ticket (elt matches 0)))
-           (http-request (concatenate 'string *url* "index.php")
-                         :method :post
-                         :parameters `(("username" . ,username)
-                                       ("password" . ,password)
-                                       ("login_ticket" . ,login-ticket))
-                         :cookie-jar *cookie*)))))))
+      ((already-logged-in? response) (index-request))
+      (t (init-login-request :username username
+                             :password password
+                             :response response)))))
+
+;;; already-logged-in?: String -> Boolean
+;;; check if the response to the index-page thinks you're logged in
+(defun already-logged-in? (response)
+  (scan "eingeloggt" response))
+
+;;; init-login-request: String String -> String
+;;; make a login-request with username and password and return the
+;;; index page
+(defun init-login-request (&key username password response)
+  (http-login-request username password (search-for-login-ticket response)))
+
+;;; search-for-login-ticket: String -> String
+;;; search in an html response the login-ticket to log in to the
+;;; studip system
+(defun search-for-login-ticket (response)
+  (multiple-value-bind (regex matches)
+      (scan-to-strings "id=\"login_ticket\" value=\"(\\S+)?\"" response)
+    (declare (ignore regex))
+    (elt matches 0)))
+
+;;; http-login-request: String String String -> String
+;;; make a login-request with authentication and sending the
+;;; login-ticket and return the index page
+(defun http-login-request (username password login-ticket)
+  (http-request (concatenate 'string *url* "index.php")
+                :method :post
+                :parameters `(("username" . ,username)
+                              ("password" . ,password)
+                              ("login_ticket" . ,login-ticket))
+                :cookie-jar *cookie*))
 
 (define-test init-test
-  (assert-true (scan "Startseite f&uuml;r Studierende bei Stud.IP" (init-session :username *username* :password *password*)))
+  (assert-true (scan "Startseite f&uuml;r Studierende bei Stud.IP"
+                     (init-session :username *username* :password *password*)))
   (do-logout)
-  (assert-true (scan "Bitte identifizieren Sie sich" (init-session :username *username* :password "bogus"))))
+  (assert-true (scan "Bitte identifizieren Sie sich"
+                     (init-session :username *username* :password "bogus"))))
                       
 ;; do-init-request: -> string
 ;; returns login page of studip
 (defun do-init-request ()
-  (http-request (concatenate 'string *url* "login.php")
-                :cookie-jar *cookie*))
+  (studip-http-request "login.php"))
 
 (define-test init-request
+  (do-logout)
   (assert-true (scan "login_ticket" (do-init-request))))
 
 ;; do-logout: -> boolean
 ;; perform logout on page, return success
 (defun do-logout ()
-  (not (null (scan "abgemeldet" (http-request (concatenate 'string *url* "logout.php")
-                                              :cookie-jar *cookie*)))))
+  (not (null (scan "abgemeldet" (studip-http-request "logout.php")))))
 
 (define-test logout-test
   (do-logout)
@@ -69,8 +108,7 @@
 ;; do-seminars-request: -> string
 ;; return page of seminars as string
 (defun do-seminars-request ()
-  (http-request (concatenate 'string *url* "meine_seminare.php")
-                :cookie-jar *cookie*))
+  (studip-http-request "meine_seminare.php"))
 
 (define-test seminars-request-test
   (init-session :username *username* :password *password*)
@@ -79,13 +117,19 @@
 ;; list-all-seminars: -> (listof (string . string))
 ;; return all seminars in a list
 (defun list-all-seminars ()
-  (nreverse (get-all-groups-from-scan "(?m)<a href=\"(seminar.*?)\"\\s*>.*?<font size=.*?>(.*?)</font>" (do-seminars-request))))
+  (if *seminars*
+      *seminars*
+      (nreverse (get-all-groups-from-scan
+                 "(?m)<a href=\"(seminar.*?)\"\\s*>.*?<font size=.*?>(.*?)</font>"
+                 (do-seminars-request)))))
 
 ;; seminar-download-links: -> (listof (string . string))
 ;; return all seminars in a list with its name and its url for the
 ;; download section
 (defun seminar-download-links ()
-  (nreverse (get-all-groups-from-scan "(?m)<a href=\"seminar.*?\"\\s*>.*?<font size=.*?>(.*?)</font>.*?(seminar_main.\\S*?seminarFolders)" (do-seminars-request))))
+  (nreverse (get-all-groups-from-scan
+             "(?m)<a href=\"seminar.*?\"\\s*>.*?<font size=.*?>(.*?)</font>.*?(seminar_main.\\S*?seminarFolders)"
+             (do-seminars-request))))
 
 ;; get-all-groups-from-scan: string string -> (listof (array string))
 ;; compute all possibilities matching regex in str, and return their
@@ -95,6 +139,7 @@
     (do-register-groups (first second) (regex str)
       (push (cons first second) result))
     result))
+
 ;; select-seminar: -> string
 ;; reads in a selection of a seminar and returns its page
 (defun select-seminar ()
@@ -113,7 +158,9 @@
 ;; list-news: -> (listof (string . string))
 ;; return title and url of all news
 (defun list-news ()
-  (nreverse (get-all-groups-from-scan "(?m)<td class=\"printhead\".*?(seminar_main.php.*?)\".*?>(.*?)</a>" (select-seminar))))
+  (nreverse (get-all-groups-from-scan
+             "(?m)<td class=\"printhead\".*?(seminar_main.php.*?)\".*?>(.*?)</a>"
+             (select-seminar))))
 
 ;; select-seminar-news: -> string
 ;; return title and text of a selected news
@@ -122,21 +169,27 @@
           :url-pos #'car
           :str-pos #'cdr))
 
-;; display-seminar-news: -> void
-;; EFFECT: display content of selected news
-(defun display-seminar-news ()
-  (regex-replace-all "<br.*?>" (elt (nth-value 1 (scan-to-strings "(?m)class=\"printcontent\".*?<br>(.*?)</td>" (select-seminar-news))) 0) "
+;; get-seminar-news: -> String
+;; return a specific news from news of a seminar
+(defun get-seminar-news ()
+  (regex-replace-all "<br.*?>"
+                     (elt (nth-value 1
+                                     (scan-to-strings "(?m)class=\"printcontent\".*?<br>(.*?)</td>"
+                                                      (select-seminar-news))
+                                     )
+                          0)
+                     "
 "))
 
 ;; select-seminar-details: -> string
 ;; return html-page of selected seminar
 (defun select-seminar-details ()
   (select-seminar)
-  (http-request (concatenate 'string *url* "details.php")
-                :cookie-jar *cookie*))
+  (studip-http-request "details.php"))
 
 ;; cleanup-html: string -> string
-;; removes all html specific content from strand returns only text
+;; removes all html specific content from str and returns only text by
+;; substituting the equivalent ascii-string
 (defun cleanup-html (str)
   (regex-replace-all "\\s\\s+"
                      (regex-replace-all "(<br.*?>|<tr>|<li>)"
@@ -149,23 +202,37 @@
 (defun get-seminar-details ()
   (cleanup-html (scan-to-strings "(?m)<table.*</table>" (substitute #\  #\Newline (select-seminar-details)))))
 
+;;; select: (-> Pair) (Pair -> String) (Pair -> String) -> String
 (defun select (&key function url-pos str-pos)
   (let ((selection (funcall function)))
     (print-selection selection :str-pos str-pos)
-    (format t "Select an action: ")
-    (let ((selected (read)))
-      (cond
-        ((numberp selected) (http-request (concatenate 'string *url* (funcall url-pos (elt selection (1- selected))))
-                                          :cookie-jar *cookie*))
-        (t (format t "It needs to be a number. You typed: ~a~%" selected)
-           (select :function function :url-pos url-pos :str-pos str-pos))))))
+    (select-an-action selection url-pos)))
+
+;;; select-an-action: Pair (Pair -> String) -> String
+;;; select an action by number from a selection
+(defun select-an-action (selection url-pos)
+  (format t "Select an action: ")
+  (let* ((to-select (read-a-number))
+         (selected (elt selection (1- to-select)))
+         (url-suffix (funcall url-pos selected)))
+    (studip-http-request url-suffix)))
+
+;;; read-a-number: -> Number
+;;; get a number from the user
+(defun read-a-number ()
+  (let ((number (read)))
+    (cond
+      ((numberp number) number)
+      (t (progn
+           (format t "~&Please provide a number: ")
+           (read-a-number))))))
 
 ;; print-selection: (listof (string . string)) (:str-pos function) -> void
 ;; EFFECT: print possibilities from selection with accessor :str-pos
 (defun print-selection (selection &key str-pos)
   (loop for name in selection
      and j = 1 then (1+ j)
-     do (format t "~a: ~a~%" (funcall str-pos name) j)))
+     do (format t "~a: ~a~%" (html-entities:decode-entities (funcall str-pos name)) j)))
 
 ;; do-change-password: String String -> void
 ;; EFFECT: change old-password for username to new-password, also
@@ -183,7 +250,9 @@
   (labels ((escape-earmuffs (str)
              (regex-replace-all "\\*" str "\\\\*")))
     (alexandria:write-string-into-file
-     (regex-replace (format nil "(~A)\\s+.*?\\)" (escape-earmuffs parameter)) (alexandria:read-file-into-string *rc-file*) (format nil "\\1 ~w)" value))
+     (regex-replace (format nil "(~A)\\s+.*?\\)" (escape-earmuffs parameter))
+                    (alexandria:read-file-into-string *rc-file*)
+                    (format nil "\\1 ~w)" value))
      *rc-file*
      :if-exists :supersede)))
 
