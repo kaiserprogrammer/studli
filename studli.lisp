@@ -1,12 +1,11 @@
-;; (dolist (i '(drakma cl-ppcre lisp-unit alexandria html-entities cl-fad))
-;;   (ql:quickload i))
-
 (defpackage :studli
-  (:use :cl :drakma :cl-ppcre :lisp-unit :cl-fad))
+  (:use :cl :drakma :cl-ppcre :cl-fad)
+  (:export :init-session
+           :get-seminar-news
+           :get-seminar-details
+           :print-seminar-details))
 
 (in-package :studli)
-
-(defparameter *testing* t)
 
 (defparameter *username* "")
 
@@ -39,7 +38,7 @@
 ;; init-session: string string -> boolean
 ;; initiate login to studip with username :username, password
 ;; :password, report success
-(defun init-session (&key username password)
+(defun init-session (&key (username *username*) (password *password*))
   (let ((response (do-init-request)))
     (cond
       ((already-logged-in? response) (index-request))
@@ -78,39 +77,22 @@
                               ("login_ticket" . ,login-ticket))
                 :cookie-jar *cookie*))
 
-(define-test init-test
-  (assert-true (scan "Startseite f&uuml;r Studierende bei Stud.IP"
-                     (init-session :username *username* :password *password*)))
-  (do-logout)
-  (assert-true (scan "Bitte identifizieren Sie sich"
-                     (init-session :username *username* :password "bogus"))))
                       
 ;; do-init-request: -> string
 ;; returns login page of studip
 (defun do-init-request ()
   (studip-http-request "login.php"))
 
-(define-test init-request
-  (do-logout)
-  (assert-true (scan "login_ticket" (do-init-request))))
 
 ;; do-logout: -> boolean
 ;; perform logout on page, return success
 (defun do-logout ()
   (not (null (scan "abgemeldet" (studip-http-request "logout.php")))))
 
-(define-test logout-test
-  (do-logout)
-  (assert-true (scan "login_ticket" (do-init-request))))
-
 ;; do-seminars-request: -> string
 ;; return page of seminars as string
 (defun do-seminars-request ()
   (studip-http-request "meine_seminare.php"))
-
-(define-test seminars-request-test
-  (init-session :username *username* :password *password*)
-  (assert-true (scan "Meine Veranstaltungen" (do-seminars-request))))
 
 ;; list-desired-seminars: -> (listof (string . string))
 ;; return all seminars in a list
@@ -296,19 +278,4 @@
     (t (cons (car list)
            (take (1- num) (cdr list))))))
 
-(define-test take-test
-  (let ((alist (list 'a 'b 'c))
-        (numlist (list 1 2 3)))
-    (assert-equal (list 'a) (take 1 alist))
-    (assert-equal (list 'a 'b) (take 2 alist))
-    (assert-equal alist (take 3 alist))
-    (assert-equal alist (take 100 alist))
-    (assert-equal nil (take 5 '()))
-    (assert-equal nil (take 0 '()))
-    (assert-equal nil (take -1 '()))
-    (assert-equal nil (take 0 alist))
-    (assert-equal nil (take -5 alist))
-    (assert-equal numlist (take 5 numlist))))
-
-(when *testing*
-  (run-tests))
+(init-session :username *username* :password *password*)

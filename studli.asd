@@ -7,6 +7,5 @@
                :alexandria
                :cl-ppcre
                :html-entities
-               :cl-fad
-               :lisp-unit))
+               :cl-fad))
 
