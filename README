@@ -6,3 +6,18 @@ It is written in Common Lisp, and tested on SBCL 1.50
 You need to have the dependencies loaded.
 
 Then load the studli file and hack away on the REPL.
+
+ASDF system description is available
+
+USAGE:
+=====
+
+you need a ".studlirc" file in your home directory which should contain at least:
+(defparameter *username* your-username)
+(defparameter *password* your-password)
+
+
+call (get-seminar-details) then select which seminar to get description of a seminar
+print-seminar-details encodes the html-format to string
+
+call (get-seminar-news)
