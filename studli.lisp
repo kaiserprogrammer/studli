@@ -1,11 +1,8 @@
-;; (ql:quickload 'drakma)
-;; (ql:quickload 'cl-ppcre)
-;; (ql:quickload 'lisp-unit)
-;; (ql:quickload 'alexandria)
-;; (ql:quickload 'html-entities)
+;; (dolist (i '(drakma cl-ppcre lisp-unit alexandria html-entities cl-fad))
+;;   (ql:quickload i))
 
 (defpackage :studli
-  (:use :cl :drakma :cl-ppcre :lisp-unit))
+  (:use :cl :drakma :cl-ppcre :lisp-unit :cl-fad))
 
 (in-package :studli)
 
@@ -21,9 +18,10 @@
 
 (defparameter *rc-file* "~/.studlirc")
 
-(defparameter *seminars* (list-all-seminars))
+(defparameter *seminars* nil)
 
-(load *rc-file*)
+(when (file-exists-p *rc-file*)
+  (load *rc-file*))
 
 (defparameter *cookie* (make-instance 'cookie-jar))
 
@@ -114,14 +112,27 @@
   (init-session :username *username* :password *password*)
   (assert-true (scan "Meine Veranstaltungen" (do-seminars-request))))
 
-;; list-all-seminars: -> (listof (string . string))
+;; list-desired-seminars: -> (listof (string . string))
 ;; return all seminars in a list
-(defun list-all-seminars ()
+(defun list-desired-seminars ()
   (if *seminars*
       *seminars*
-      (nreverse (get-all-groups-from-scan
-                 "(?m)<a href=\"(seminar.*?)\"\\s*>.*?<font size=.*?>(.*?)</font>"
-                 (do-seminars-request)))))
+      (request-new-seminar-list)))
+
+;;; request-new-seminar-list: -> (listof (String . String))
+;;; EFFECT: set *seminar* to new list
+;;; request new seminar list and take the desired amount of it
+(defun request-new-seminar-list ()
+  (setf *seminars*
+        (take *list-num-first-seminars*
+              (list-all-seminars))))
+
+;;; list-all-seminars: -> (Pair (listof String) (listof String))
+;;; returns all Seminar names and their corresponding paths
+(defun list-all-seminars ()
+  (nreverse (get-all-groups-from-scan
+             "(?m)<a href=\"(seminar.*?)\"\\s*>.*?<font size=.*?>(.*?)</font>"
+             (do-seminars-request))))
 
 ;; seminar-download-links: -> (listof (string . string))
 ;; return all seminars in a list with its name and its url for the
@@ -143,7 +154,7 @@
 ;; select-seminar: -> string
 ;; reads in a selection of a seminar and returns its page
 (defun select-seminar ()
-  (select :function #'list-all-seminars
+  (select :function #'list-desired-seminars
           :url-pos #'car
           :str-pos #'cdr))
 
@@ -159,7 +170,7 @@
 ;; return title and url of all news
 (defun list-news ()
   (nreverse (get-all-groups-from-scan
-             "(?m)<td class=\"printhead\".*?(seminar_main.php.*?)\".*?>(.*?)</a>"
+             "(?s)<td class=\"printhead\".*?(seminar_main.php.*?)\".*?>(.*?)</a>"
              (select-seminar))))
 
 ;; select-seminar-news: -> string
@@ -174,7 +185,7 @@
 (defun get-seminar-news ()
   (regex-replace-all "<br.*?>"
                      (elt (nth-value 1
-                                     (scan-to-strings "(?m)class=\"printcontent\".*?<br>(.*?)</td>"
+                                     (scan-to-strings "(?s)class=\"printcontent\".*?<br>(.*?)</td>"
                                                       (select-seminar-news))
                                      )
                           0)
@@ -191,16 +202,24 @@
 ;; removes all html specific content from str and returns only text by
 ;; substituting the equivalent ascii-string
 (defun cleanup-html (str)
-  (regex-replace-all "\\s\\s+"
-                     (regex-replace-all "(<br.*?>|<tr>|<li>)"
-                                        (regex-replace-all "(<td.*?>|</td>|</tr>|<table.*?>|</table>|<font.*?>|</font>|<a.*?>|</a>|<img.*?>|<div.*?>|</div>|<b>|</b>|<i>|</i>|<blockquote>|</blockquote>|<script.*?>|</script>|<!--.*?-->|<ul>|</ul>|</li>)" str "")
-                                        (format nil "~%"))
-                     " "))
+  (regex-replace-all "(?s)(<br.*?>|<tr>|<li>)"
+                     (regex-replace-all "(?s)(<td.*?>|</td>|</tr>|<table.*?>|</table>|<font.*?>|</font>|<a.*?>|</a>|<img.*?>|<div.*?>|</div>|<b>|</b>|<i>|</i>|<blockquote>|</blockquote>|<script.*?>|</script>|<!--.*?-->|<ul>|</ul>|</li>|\\s\\s+)"
+                                        str "")
+                     (format nil "~%")))
+
+
 ;; get-seminar-details: -> string
 ;; return details of selected seminar as a string without html
 ;; specific content
 (defun get-seminar-details ()
-  (cleanup-html (scan-to-strings "(?m)<table.*</table>" (substitute #\  #\Newline (select-seminar-details)))))
+  (html-entities:decode-entities
+   (cleanup-html
+    (scan-to-strings "(?s)<table.*</table>"
+                     (select-seminar-details)))))
+
+;;; print-seminar-details: -> void
+(defun print-seminar-details ()
+  (format t "~%~a" (get-seminar-details)))
 
 ;;; select: (-> Pair) (Pair -> String) (Pair -> String) -> String
 (defun select (&key function url-pos str-pos)
@@ -217,14 +236,14 @@
          (url-suffix (funcall url-pos selected)))
     (studip-http-request url-suffix)))
 
-;;; read-a-number: -> Number
-;;; get a number from the user
-(defun read-a-number ()
+;;; read-a-number: &optional String -> Number
+;;; get a number from the user print optional String before allowing input
+(defun read-a-number (&optional (say "Please provide a number: "))
   (let ((number (read)))
     (cond
       ((numberp number) number)
       (t (progn
-           (format t "~&Please provide a number: ")
+           (format t "~&~a" say)
            (read-a-number))))))
 
 ;; print-selection: (listof (string . string)) (:str-pos function) -> void
@@ -269,6 +288,27 @@
                 :method :post
                 :cookie-jar *cookie*))
 
+;;; take: Number (listof A) -> (listof A)
+;;; it gives the first num items in list back
+(defun take (num list)
+  (cond
+    ((or (<= num 0) (null list)) nil)
+    (t (cons (car list)
+           (take (1- num) (cdr list))))))
+
+(define-test take-test
+  (let ((alist (list 'a 'b 'c))
+        (numlist (list 1 2 3)))
+    (assert-equal (list 'a) (take 1 alist))
+    (assert-equal (list 'a 'b) (take 2 alist))
+    (assert-equal alist (take 3 alist))
+    (assert-equal alist (take 100 alist))
+    (assert-equal nil (take 5 '()))
+    (assert-equal nil (take 0 '()))
+    (assert-equal nil (take -1 '()))
+    (assert-equal nil (take 0 alist))
+    (assert-equal nil (take -5 alist))
+    (assert-equal numlist (take 5 numlist))))
+
 (when *testing*
   (run-tests))
-
