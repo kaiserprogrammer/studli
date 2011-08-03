@@ -1,7 +1,7 @@
 Studli is a StudIP Client to manage your student life at the University of Passau
 ======
 
-It is written in Common Lisp, and tested on SBCL 1.50
+It is written in Common Lisp, and tested on SBCL 1.0.50
 
 You need to have the dependencies loaded.
 
